@@ -30,6 +30,10 @@ Todo corre con Docker Compose: no hace falta instalar Python ni Kafka, solo Dock
    Hasta que haya al menos 2 brokers arriba, `router` y `nodo` se reinician solos
    mientras esperan al cuórum; es normal.
 
+> **Importante:** la primera vez, los **3** brokers deben estar arriba antes de que se creen los tópicos
+> (la app espera hasta 60 s y, si faltan, sale con un error en vez de crearlos con pocas réplicas).
+> Si ya se crearon mal, hay que borrar los volúmenes en los 3 equipos: `docker compose --env-file equipo.env down -v`.
+
 ## Cliente interactivo
 
 ```bash

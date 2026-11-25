@@ -22,6 +22,10 @@ _producer = None
 _ultimo_aviso = {}
 
 
+class ClusterIncompleto(RuntimeError):
+    """No están todos los brokers del cluster: no se crean tópicos para no dejarlos con pocas réplicas."""
+
+
 def _al_error(err):
     """Avisos de la conexión con el cluster (por ejemplo, 'un broker dejó de responder').
     Se muestran una vez cada 20 s para no llenar la pantalla."""
@@ -123,12 +127,34 @@ def asegurar_topicos(nombres, particiones=1, config_topico=None):
     faltan = [n for n in nombres if n not in set(md.topics)]
     if not faltan:
         return
-    vivos = sorted(md.brokers)[:max(1, config.REPLICACION)]     # ids de broker, de mayor a menor prioridad
+
+    # Un tópico creado con menos brokers de los esperados queda con pocas réplicas para siempre
+    # (con min.insync.replicas=2 ni siquiera se podría escribir en él). Por eso se espera a que
+    # estén TODOS los brokers antes de crear nada.
+    esperados = max(1, config.REPLICACION)
+    limite_brokers, avisado = time.time() + 60, False
+    while len(md.brokers) < esperados and time.time() < limite_brokers:
+        if not avisado:
+            imprimir_seguro(f"[ESPERA] Hay {len(md.brokers)} de {esperados} brokers. "
+                            "Esperando a los demás antes de crear tópicos...")
+            avisado = True
+        time.sleep(3)
+        try:
+            md = admin.list_topics(timeout=5)
+        except KafkaException:
+            pass
+    if len(md.brokers) < esperados:
+        raise ClusterIncompleto(f"Solo hay {len(md.brokers)} de {esperados} brokers; no se crean tópicos "
+                                "así. Levanta los 3 equipos (puertos 9092 y 9093 abiertos entre ellos).")
+    faltan = [n for n in nombres if n not in set(md.topics)]     # otro nodo pudo crearlos mientras tanto
+    if not faltan:
+        return
+    vivos = sorted(md.brokers)[:esperados]     # ids de broker, de mayor a menor prioridad
     cfg = config_topico or {}
 
     def crear(con_orden):
         if con_orden:
-            nuevos = [NewTopic(n, num_partitions=-1, replication_factor=-1,
+            nuevos = [NewTopic(n, num_partitions=particiones, replication_factor=-1,
                                replica_assignment=[list(vivos) for _ in range(particiones)], config=cfg)
                       for n in faltan]
         else:   # respaldo: que Kafka reparta las réplicas
